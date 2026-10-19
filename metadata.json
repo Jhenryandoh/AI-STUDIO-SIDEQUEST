@@ -1,0 +1,6 @@
+{
+  "name": "NightQuest",
+  "description": "Mobile-first night-out adventure game with friends featuring live quest engine, photo verification, dynamic scoring, and real-time player tracking.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

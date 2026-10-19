@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>NightQuest</title>
+
+  <!-- Google Fonts: Syne (Futuristic/Display) & Plus Jakarta Sans (Readable UI) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet CSS & JS (for the Map) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  
+  <!-- Phosphor Icons (Modern Icons) -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            syne: ['Syne', 'sans-serif'],
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          },
+          colors: {
+            app: {
+              bg: '#05050A',
+              card: '#12121A',
+              border: '#2A2A35'
+            },
+            neon: {
+              purple: '#B026FF',
+              cyan: '#00F0FF',
+              lime: '#39FF14',
+              pink: '#FF0055'
+            }
+          },
+          boxShadow: {
+            'neon-purple': '0 0 15px rgba(176, 38, 255, 0.5)',
+            'neon-cyan': '0 0 15px rgba(0, 240, 255, 0.5)',
+            'neon-lime': '0 0 15px rgba(57, 255, 20, 0.5)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Mobile App Resets & Custom Scrollbar */
+    body {
+      background-color: #05050A;
+      color: #ffffff;
+      overscroll-behavior-y: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2A2A35; border-radius: 4px; }
+    
+    .glass-nav {
+      background: rgba(18, 18, 26, 0.8);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .view-section {
+      display: none;
+      animation: fadeIn 0.3s ease-in-out;
+    }
+    .view-section.active { display: block; }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .pulse-glow { animation: pulseGlow 2s infinite; }
+    @keyframes pulseGlow {
+      0% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.4); }
+      50% { box-shadow: 0 0 25px rgba(0, 240, 255, 0.8); }
+      100% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.4); }
+    }
+
+    /* Secret Quest Alert Animation */
+    .secret-quest-overlay {
+      display: none;
+      background: radial-gradient(circle, rgba(176,38,255,0.2) 0%, rgba(5,5,10,0.95) 80%);
+    }
+    .secret-quest-overlay.active {
+      display: flex;
+      animation: flashIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    }
+    @keyframes flashIn {
+      0% { opacity: 0; transform: scale(1.1); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+  </style>
+</head>
+
+<!-- 
+========================================================================================
+🚀 NIGHTQUEST BACKEND & DATABASE CONNECTION README
+========================================================================================
+
+Dear Developer, use this section as your blueprint to wire up the backend.
+
+1. ARCHITECTURE & PORTS (Recommended Setup)
+-------------------------------------------
+Frontend: React Native (Mobile App) or Next.js (PWA). Currently running on localhost:3000
+Backend API: Node.js (Express/NestJS) or Python (FastAPI). Default Port: localhost:4000
+Database: PostgreSQL 15+. Default Port: localhost:5432
+WebSockets: Socket.io attached to Backend Port 4000.
+Object Storage: AWS S3 or Cloudflare R2 (for photos).
+
+2. POSTGRESQL SCHEMA (Create these tables)
+-------------------------------------------
+CREATE TABLE players (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  display_name VARCHAR(50),
+  email VARCHAR(100) UNIQUE,
+  phone VARCHAR(20),
+  country VARCHAR(50),
+  avatar_url TEXT,
+  device_token TEXT, -- For guest/anonymous sessions
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_code VARCHAR(6) UNIQUE, -- e.g., 'X7B9Q'
+  host_player_id UUID REFERENCES players(id),
+  mode VARCHAR(20), -- 'solo', 'duo', 'group'
+  vibe VARCHAR(50),
+  difficulty VARCHAR(20),
+  duration_minutes INT,
+  lat FLOAT, lng FLOAT, -- Used for 'Join Nearby Public Room'
+  is_public BOOLEAN DEFAULT FALSE,
+  status VARCHAR(20) DEFAULT 'lobby', -- 'lobby', 'active', 'ended'
+  started_at TIMESTAMP,
+  ends_at TIMESTAMP
+);
+
+CREATE TABLE session_players (
+  session_id UUID REFERENCES sessions(id),
+  player_id UUID REFERENCES players(id),
+  team_id UUID NULL,
+  joined_at TIMESTAMP DEFAULT NOW(),
+  total_points INT DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  PRIMARY KEY (session_id, player_id)
+);
+
+CREATE TABLE quest_templates (
+  id UUID PRIMARY KEY,
+  title VARCHAR(100),
+  description TEXT,
+  category VARCHAR(50), -- 'photo_op', 'icebreaker', 'dare', 'secret'
+  difficulty INT,
+  points INT,
+  requires_group_size INT
+);
+
+CREATE TABLE assigned_quests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID REFERENCES sessions(id),
+  player_id UUID REFERENCES players(id),
+  quest_template_id UUID REFERENCES quest_templates(id),
+  is_secret BOOLEAN DEFAULT FALSE,
+  status VARCHAR(20) DEFAULT 'assigned', -- 'assigned', 'completed', 'expired'
+  assigned_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE submissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assigned_quest_id UUID REFERENCES assigned_quests(id),
+  player_id UUID REFERENCES players(id),
+  photo_url TEXT,
+  lat FLOAT, lng FLOAT,
+  country_verified BOOLEAN, -- Validated via Reverse Geocoding
+  exif_timestamp TIMESTAMP,
+  review_status VARCHAR(20) DEFAULT 'pending',
+  points_awarded INT DEFAULT 0,
+  submitted_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_sessions_code ON sessions(room_code);
+CREATE INDEX idx_locations ON sessions(lat, lng); -- For Geo-spatial queries
+
+3. REQUIRED API ENDPOINTS
+-------------------------------------------
+[Auth]
+- POST /api/auth/login -> Handles Guest device_token or returning user. Registers Country.
+[Sessions]
+- POST /api/sessions -> Creates room.
+- POST /api/sessions/join -> Joins by code.
+- GET  /api/sessions/nearby?lat=X&lng=Y -> Queries public sessions within 5km radius.
+[Game State]
+- GET  /api/game/:sessionId/quests -> Fetch active quests.
+- POST /api/game/:sessionId/submit -> Form-data. Handles photo upload.
+  * Logic inside endpoint: 
+    1. Read EXIF using `exif-parser` library.
+    2. Check GPS proximity to user's registered country/location.
+    3. Upload to S3, save URL to DB.
+    4. Award points & Broadcast WS event.
+- GET  /api/game/:sessionId/leaderboard -> Joins session_players and returns ranks.
+- GET  /api/leaderboards/global -> Groups by country/global.
+[Chat]
+- GET  /api/chat/:sessionId/history
+
+4. WEBSOCKET EVENTS (Socket.io)
+-------------------------------------------
+- Emit 'join_room' (Room Code)
+- Listen 'player_joined' -> Updates Lobby UI.
+- Listen 'quest_completed' -> Triggers photo feed update & score change.
+- Listen 'secret_quest_unlocked' -> Triggers the giant neon alert for groups.
+- Emit 'send_message' -> Listen 'new_message' for Chatroom.
+- Listen 'location_update' -> Pushes lat/lng to update Leaflet Map markers live.
+
+5. HOW TO HANDLE TIMERS & CHEATING
+-------------------------------------------
+- Timer: NEVER trust client time. When host clicks 'Start', backend sets `ends_at = NOW() + duration`. 
+  Client fetches `ends_at` and runs its own UI countdown. Submissions after `ends_at` are rejected by API.
+- Photo Cheating: Require `<input type="file" capture="environment">`. Backend checks EXIF creation date. 
+  If EXIF is missing or > 10 mins old, flag for manual review. Use frontend Canvas API (simulated below) to compress 10MB iPhone photos to 500KB WebP before uploading.
+
+========================================================================================
+-->
+
+<body class="flex flex-col h-screen w-full relative pb-16">
+
+  <!-- ==================== HEADER (Visible during game) ==================== -->
+  <header id="main-header" class="hidden fixed top-0 w-full z-40 bg-app-bg/90 backdrop-blur-md border-b border-app-border px-4 py-3 flex justify-between items-center">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-neon-purple to-neon-cyan p-[2px]">
+        <img src="https://i.pravatar.cc/100?img=33" alt="Profile" class="w-full h-full rounded-full border-2 border-app-bg object-cover">
+      </div>
+      <div>
+        <h1 class="font-syne font-bold text-lg leading-none tracking-wide">Night<span class="text-neon-cyan">Quest</span></h1>
+        <p class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider" id="header-location">Tokyo, JP</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="text-right">
+        <p class="text-[10px] text-neon-purple font-bold uppercase tracking-widest">Time Left</p>
+        <p id="countdown-timer" class="font-syne font-bold text-xl text-white tabular-nums">02:59:45</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== MAIN CONTENT AREA ==================== -->
+  <main class="flex-1 w-full h-full overflow-y-auto pt-4 px-4 pb-20 relative" id="app-root">
+
+    <!-- VIEW 1: AUTH / ONBOARDING -->
+    <section id="view-auth" class="view-section active h-full flex flex-col justify-center max-w-md mx-auto">
+      <div class="text-center mb-10">
+        <h1 class="font-syne font-extrabold text-5xl mb-2 tracking-tighter">Night<span class="text-neon-cyan">Quest</span></h1>
+        <p class="text-gray-400 font-medium">Own the night. Prove the stories.</p>
+      </div>
+      
+      <div class="bg-app-card p-6 rounded-3xl border border-app-border shadow-lg">
+        <h2 class="font-syne text-xl font-bold mb-6">Create Profile</h2>
+        <form onsubmit="handleLogin(event)" class="space-y-5">
+          <div>
+            <label class="text-xs text-gray-400 uppercase font-bold tracking-wider">Display Name</label>
+            <input type="text" required class="w-full bg-transparent border-b-2 border-gray-700 py-2 text-white focus:outline-none focus:border-neon-cyan transition-colors" placeholder="e.g. NightRider">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase font-bold tracking-wider">Email (Optional - To save stats)</label>
+            <input type="email" class="w-full bg-transparent border-b-2 border-gray-700 py-2 text-white focus:outline-none focus:border-neon-purple transition-colors" placeholder="you@example.com">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 uppercase font-bold tracking-wider">Country Verification</label>
+            <div class="flex gap-2 mt-2">
+              <select id="country-select" class="flex-1 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan">
+                <option value="US">🇺🇸 United States</option>
+                <option value="UK">🇬🇧 United Kingdom</option>
+                <option value="JP">🇯🇵 Japan</option>
+                <option value="AU">🇦🇺 Australia</option>
+                <option value="AUTO">📍 Auto-Detect Location</option>
+              </select>
+            </div>
+            <p class="text-[10px] text-gray-500 mt-1">Required for Regional Leaderboards.</p>
+          </div>
+          <button type="submit" class="w-full bg-white text-black font-syne font-bold text-lg py-4 rounded-xl mt-4 hover:bg-gray-200 transition-colors shadow-neon-cyan">
+            ENTER THE NIGHT
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- VIEW 2: LOBBY -->
+    <section id="view-lobby" class="view-section h-full flex flex-col pt-10 max-w-md mx-auto">
+      <h2 class="font-syne font-bold text-3xl mb-6">Ready to Roll?</h2>
+      
+      <div class="grid grid-cols-2 gap-4 mb-8">
+        <button onclick="startSession()" class="bg-gradient-to-br from-app-card to-[#1a1a2e] p-6 rounded-2xl border border-neon-purple shadow-neon-purple text-left relative overflow-hidden group">
+          <i class="ph-fill ph-plus-circle text-4xl text-neon-purple mb-2"></i>
+          <h3 class="font-syne font-bold text-lg">Create<br>Private Room</h3>
+        </button>
+        <button onclick="alert('Open Camera for QR Code')" class="bg-app-card p-6 rounded-2xl border border-app-border text-left">
+          <i class="ph-fill ph-qr-code text-4xl text-gray-400 mb-2"></i>
+          <h3 class="font-syne font-bold text-lg">Join via<br>Room Code</h3>
+        </button>
+      </div>
+
+      <h3 class="font-syne font-bold text-xl mb-4 text-neon-cyan">Nearby Public Nights</h3>
+      <div class="space-y-3">
+        <div class="bg-app-card p-4 rounded-xl border border-app-border flex justify-between items-center">
+          <div>
+            <h4 class="font-bold text-md">Neon District Crawl</h4>
+            <p class="text-xs text-gray-400">0.8km away • 12 Active Players</p>
+          </div>
+          <button onclick="startSession()" class="bg-neon-cyan/20 text-neon-cyan px-4 py-2 rounded-lg font-bold text-sm border border-neon-cyan/50">JOIN</button>
+        </div>
+        <div class="bg-app-card p-4 rounded-xl border border-app-border flex justify-between items-center">
+          <div>
+            <h4 class="font-bold text-md">Shibuya Meltdown</h4>
+            <p class="text-xs text-gray-400">1.2km away • 45 Active Players</p>
+          </div>
+          <button onclick="startSession()" class="bg-neon-cyan/20 text-neon-cyan px-4 py-2 rounded-lg font-bold text-sm border border-neon-cyan/50">JOIN</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: DASHBOARD (Active Quests) -->
+    <section id="view-dashboard" class="view-section pt-16 pb-6 h-full max-w-lg mx-auto">
+      
+      <!-- Session Stats -->
+      <div class="flex justify-between items-center mb-6 bg-app-card p-4 rounded-2xl border border-app-border">
+        <div class="text-center">
+          <p class="text-xs text-gray-400 font-bold uppercase">Rank</p>
+          <p class="font-syne font-bold text-xl text-neon-cyan">#3<span class="text-sm text-gray-500">/12</span></p>
+        </div>
+        <div class="h-8 w-px bg-app-border"></div>
+        <div class="text-center">
+          <p class="text-xs text-gray-400 font-bold uppercase">Points</p>
+          <p class="font-syne font-bold text-xl text-neon-lime" id="user-score">450</p>
+        </div>
+        <div class="h-8 w-px bg-app-border"></div>
+        <div class="text-center">
+          <p class="text-xs text-gray-400 font-bold uppercase">Quests</p>
+          <p class="font-syne font-bold text-xl text-white">4</p>
+        </div>
+      </div>
+
+      <!-- Active Quest Card -->
+      <div class="relative bg-gradient-to-b from-[#1E112A] to-app-card p-1 rounded-3xl mb-8 pulse-glow">
+        <div class="bg-app-card rounded-[22px] p-6 h-full border border-white/5 relative overflow-hidden">
+          <div class="absolute top-0 right-0 bg-neon-purple text-white text-xs font-bold px-3 py-1 rounded-bl-xl z-10">EPIC TIER</div>
+          
+          <h2 class="font-syne font-bold text-3xl mb-3 pr-12 leading-tight">Take a selfie wearing a stranger's hat.</h2>
+          <p class="text-sm text-gray-400 mb-6">Must clearly show the hat and the stranger in the background.</p>
+          
+          <div class="flex justify-between items-center mb-6">
+            <span class="bg-app-bg px-4 py-2 rounded-full text-neon-lime font-bold text-sm border border-neon-lime/30">+100 PTS</span>
+            <button class="text-gray-400 text-sm flex items-center gap-1 hover:text-white transition"><i class="ph ph-arrows-clockwise"></i> Skip (-10 pts)</button>
+          </div>
+
+          <!-- Camera Trigger -->
+          <div class="relative">
+            <input type="file" accept="image/*" capture="environment" id="camera-input" class="absolute inset-0 w-full h-full opacity-0 z-20 cursor-pointer" onchange="processPhoto(this)">
+            <button class="w-full bg-neon-cyan text-black font-syne font-bold text-xl py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-white transition-colors">
+              <i class="ph-bold ph-camera text-2xl"></i> VERIFY QUEST
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Photo Feed -->
+      <h3 class="font-syne font-bold text-lg mb-4 text-white">Squad Feed</h3>
+      <div class="flex gap-4 overflow-x-auto pb-4 snap-x">
+        <!-- Feed Items -->
+        <div class="min-w-[140px] h-[200px] rounded-xl bg-gray-800 relative snap-center overflow-hidden">
+          <img src="https://images.unsplash.com/photo-1570872626485-d8ffea69f463?auto=format&fit=crop&q=80&w=300" class="w-full h-full object-cover opacity-80" alt="Feed">
+          <div class="absolute bottom-0 w-full p-2 bg-gradient-to-t from-black/90 to-transparent">
+            <p class="text-xs font-bold text-neon-lime">+50 pts</p>
+            <p class="text-[10px] text-gray-300 truncate">Shot by Alex</p>
+          </div>
+        </div>
+        <div class="min-w-[140px] h-[200px] rounded-xl bg-gray-800 relative snap-center overflow-hidden border border-neon-purple/50">
+          <img src="https://images.unsplash.com/photo-1566737236500-c8ac43014a67?auto=format&fit=crop&q=80&w=300" class="w-full h-full object-cover opacity-80" alt="Feed">
+          <div class="absolute bottom-0 w-full p-2 bg-gradient-to-t from-black/90 to-transparent">
+            <p class="text-xs font-bold text-neon-lime">+75 pts</p>
+            <p class="text-[10px] text-gray-300 truncate">Shot by Sarah</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: MAP (Leaflet Tracker) -->
+    <section id="view-map" class="view-section h-full w-full absolute top-0 left-0 pt-14 pb-16 z-0">
+      <div id="leaflet-map" class="w-full h-full bg-app-bg z-0"></div>
+      
+      <!-- Overlay UI for Map -->
+      <div class="absolute top-20 left-4 right-4 z-[400] flex justify-between pointer-events-none">
+        <div class="bg-app-card/90 backdrop-blur pointer-events-auto px-4 py-2 rounded-full border border-app-border shadow-lg flex items-center gap-2">
+          <div class="w-3 h-3 bg-neon-lime rounded-full animate-pulse"></div>
+          <span class="text-xs font-bold tracking-wider">LIVE TRACKING</span>
+        </div>
+        <button class="bg-app-card/90 backdrop-blur pointer-events-auto p-3 rounded-full border border-app-border shadow-lg text-white" onclick="centerMap()">
+          <i class="ph-bold ph-crosshair text-xl"></i>
+        </button>
+      </div>
+    </section>
+
+    <!-- VIEW 5: LEADERBOARDS -->
+    <section id="view-leaderboard" class="view-section pt-16 pb-6 h-full max-w-lg mx-auto">
+      <h2 class="font-syne font-bold text-3xl mb-6">Rankings</h2>
+      
+      <!-- Tabs -->
+      <div class="flex bg-app-card rounded-xl p-1 mb-6">
+        <button class="flex-1 py-2 text-sm font-bold bg-app-bg rounded-lg shadow text-white">Session</button>
+        <button class="flex-1 py-2 text-sm font-bold text-gray-500 hover:text-white transition">Friends</button>
+        <button class="flex-1 py-2 text-sm font-bold text-gray-500 hover:text-white transition">Country</button>
+        <button class="flex-1 py-2 text-sm font-bold text-gray-500 hover:text-white transition">Global</button>
+      </div>
+
+      <!-- List -->
+      <div class="space-y-3">
+        <!-- Rank 1 -->
+        <div class="bg-gradient-to-r from-[rgba(255,215,0,0.15)] to-transparent p-4 rounded-xl border border-[#FFD700]/30 flex items-center gap-4">
+          <p class="font-syne font-bold text-2xl text-[#FFD700] w-6 text-center">1</p>
+          <img src="https://i.pravatar.cc/100?img=12" class="w-10 h-10 rounded-full border border-[#FFD700]">
+          <div class="flex-1">
+            <h4 class="font-bold text-white text-md flex items-center gap-1">NeonDemon <i class="ph-fill ph-crown text-[#FFD700]"></i></h4>
+            <p class="text-[10px] text-gray-400">8 Quests Completed</p>
+          </div>
+          <p class="font-syne font-bold text-xl text-neon-lime">850</p>
+        </div>
+        
+        <!-- Rank 2 -->
+        <div class="bg-app-card p-4 rounded-xl border border-app-border flex items-center gap-4">
+          <p class="font-syne font-bold text-2xl text-[#C0C0C0] w-6 text-center">2</p>
+          <img src="https://i.pravatar.cc/100?img=44" class="w-10 h-10 rounded-full">
+          <div class="flex-1">
+            <h4 class="font-bold text-white text-md">SarahVibes</h4>
+            <p class="text-[10px] text-gray-400">6 Quests Completed</p>
+          </div>
+          <p class="font-syne font-bold text-xl text-neon-lime">620</p>
+        </div>
+
+        <!-- Rank 3 (User) -->
+        <div class="bg-app-card p-4 rounded-xl border border-neon-cyan flex items-center gap-4 relative overflow-hidden">
+          <div class="absolute left-0 top-0 bottom-0 w-1 bg-neon-cyan"></div>
+          <p class="font-syne font-bold text-2xl text-[#CD7F32] w-6 text-center">3</p>
+          <img src="https://i.pravatar.cc/100?img=33" class="w-10 h-10 rounded-full border border-neon-cyan">
+          <div class="flex-1">
+            <h4 class="font-bold text-white text-md">You</h4>
+            <p class="text-[10px] text-gray-400">4 Quests Completed</p>
+          </div>
+          <p class="font-syne font-bold text-xl text-neon-lime" id="lb-user-score">450</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 6: CHATROOM -->
+    <section id="view-chat" class="view-section pt-16 h-full max-w-lg mx-auto flex flex-col">
+      <div class="flex-1 overflow-y-auto pb-4 space-y-4" id="chat-messages">
+        <!-- System Message / Broadcast -->
+        <div class="flex justify-center">
+          <span class="bg-neon-purple/20 text-neon-purple text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider border border-neon-purple/30">
+            Game Started at 10:00 PM
+          </span>
+        </div>
+        
+        <!-- Other User -->
+        <div class="flex items-end gap-2">
+          <img src="https://i.pravatar.cc/100?img=12" class="w-6 h-6 rounded-full">
+          <div class="bg-app-card border border-app-border rounded-2xl rounded-bl-none px-4 py-2 max-w-[75%]">
+            <p class="text-xs text-neon-purple font-bold mb-1">NeonDemon</p>
+            <p class="text-sm">Just finished the bartender quest! 🍻</p>
+          </div>
+        </div>
+
+        <!-- Automated Bot Broadcast -->
+        <div class="flex justify-center my-2">
+          <div class="bg-gradient-to-r from-neon-cyan/10 to-transparent border-l-2 border-neon-cyan px-4 py-2 w-[80%] rounded-r-lg">
+            <p class="text-xs text-white"><span class="font-bold text-neon-cyan">SarahVibes</span> verified a photo op! (+75 pts)</p>
+          </div>
+        </div>
+
+        <!-- Self -->
+        <div class="flex items-end gap-2 justify-end">
+          <div class="bg-neon-cyan text-black rounded-2xl rounded-br-none px-4 py-2 max-w-[75%]">
+            <p class="text-sm font-medium">I'm heading to the rooftop next.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Chat Input -->
+      <div class="mt-auto bg-app-card p-2 rounded-full border border-app-border flex items-center gap-2">
+        <input type="text" placeholder="Message squad..." class="flex-1 bg-transparent border-none text-sm px-4 focus:outline-none text-white">
+        <button class="bg-neon-purple text-white w-10 h-10 rounded-full flex items-center justify-center hover:bg-white hover:text-black transition">
+          <i class="ph-bold ph-paper-plane-right"></i>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==================== BOTTOM NAVIGATION ==================== -->
+  <nav id="bottom-nav" class="hidden fixed bottom-0 w-full glass-nav pb-safe z-40">
+    <div class="flex justify-around items-center h-16 px-2 max-w-md mx-auto">
+      <button onclick="switchView('dashboard')" class="nav-btn text-white flex flex-col items-center gap-1 w-16" data-target="dashboard">
+        <i class="ph-fill ph-game-controller text-2xl transition-all duration-300"></i>
+        <span class="text-[9px] font-bold uppercase tracking-wider">Quests</span>
+      </button>
+      <button onclick="switchView('map')" class="nav-btn text-gray-500 flex flex-col items-center gap-1 w-16" data-target="map">
+        <i class="ph-bold ph-map-trifold text-2xl transition-all duration-300"></i>
+        <span class="text-[9px] font-bold uppercase tracking-wider">Map</span>
+      </button>
+      <button onclick="switchView('leaderboard')" class="nav-btn text-gray-500 flex flex-col items-center gap-1 w-16" data-target="leaderboard">
+        <i class="ph-bold ph-trophy text-2xl transition-all duration-300"></i>
+        <span class="text-[9px] font-bold uppercase tracking-wider">Rank</span>
+      </button>
+      <button onclick="switchView('chat')" class="nav-btn text-gray-500 flex flex-col items-center gap-1 w-16 relative" data-target="chat">
+        <div class="absolute top-0 right-2 w-2 h-2 bg-neon-pink rounded-full"></div>
+        <i class="ph-bold ph-chats text-2xl transition-all duration-300"></i>
+        <span class="text-[9px] font-bold uppercase tracking-wider">Squad</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ==================== OVERLAYS & MODALS ==================== -->
+
+  <!-- Secret Quest Overlay -->
+  <div id="secret-quest-modal" class="fixed inset-0 z-50 secret-quest-overlay flex-col items-center justify-center px-6 text-center backdrop-blur-sm">
+    <i class="ph-fill ph-warning-octagon text-6xl text-neon-pink mb-4 animate-pulse"></i>
+    <h2 class="font-syne font-extrabold text-4xl text-white mb-2 tracking-tighter">SECRET QUEST<br><span class="text-neon-pink">UNLOCKED</span></h2>
+    <p class="text-gray-300 mb-8 font-medium">The Squad has been assigned a rare group challenge.</p>
+    
+    <div class="bg-app-card border-2 border-neon-pink p-6 rounded-2xl w-full max-w-sm mb-8 shadow-neon-pink">
+      <h3 class="font-syne font-bold text-2xl mb-2">The Abbey Road</h3>
+      <p class="text-sm text-gray-400 mb-4">Get the entire group to recreate the Beatles crosswalk photo. Needs all 4 members in frame.</p>
+      <span class="bg-neon-pink/20 text-neon-pink font-bold px-4 py-2 rounded-full border border-neon-pink/50">+300 POINTS</span>
+    </div>
+
+    <button onclick="document.getElementById('secret-quest-modal').classList.remove('active')" class="w-full max-w-sm bg-white text-black font-syne font-bold py-4 rounded-xl hover:bg-gray-200 transition">
+      ACCEPT CHALLENGE
+    </button>
+  </div>
+
+  <!-- Upload / Validation Loading Overlay -->
+  <div id="validation-overlay" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden flex-col items-center justify-center px-6 text-center">
+    <div class="w-16 h-16 border-4 border-app-border border-t-neon-cyan rounded-full animate-spin mb-6"></div>
+    <h3 id="val-status" class="font-syne font-bold text-2xl text-white mb-2">Compressing Photo...</h3>
+    <p class="text-gray-400 text-sm max-w-xs" id="val-subtext">Optimizing file size before upload.</p>
+  </div>
+
+  <!-- Success Notification -->
+  <div id="toast" class="fixed top-20 left-1/2 transform -translate-x-1/2 bg-neon-lime text-black font-bold px-6 py-3 rounded-full shadow-neon-lime transition-all duration-300 opacity-0 translate-y-[-20px] pointer-events-none z-50 flex items-center gap-2">
+    <i class="ph-bold ph-check-circle text-xl"></i>
+    <span>Quest Verified! +100 pts</span>
+  </div>
+
+  <script>
+    // ==========================================
+    // UI NAVIGATION LOGIC
+    // ==========================================
+    let mapInitialized = false;
+    let map;
+    let score = 450;
+
+    function switchView(viewId) {
+      // Hide all views
+      document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+      // Show target view
+      document.getElementById(`view-${viewId}`).classList.add('active');
+
+      // Update Nav Icons
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        const icon = btn.querySelector('i');
+        if (btn.dataset.target === viewId) {
+          btn.classList.replace('text-gray-500', 'text-white');
+          icon.classList.replace('ph-bold', 'ph-fill');
+        } else {
+          btn.classList.replace('text-white', 'text-gray-500');
+          icon.classList.replace('ph-fill', 'ph-bold');
+        }
+      });
+
+      // Special handling for map to fix Leaflet render bug in hidden divs
+      if (viewId === 'map') {
+        if (!mapInitialized) {
+          initMap();
+        } else {
+          setTimeout(() => map.invalidateSize(), 100);
+        }
+      }
+    }
+
+    // ==========================================
+    // AUTH & SESSION LOGIC
+    // ==========================================
+    function handleLogin(e) {
+      e.preventDefault();
+      const country = document.getElementById('country-select').value;
+      if(country === 'AUTO') {
+        alert("Location permissions requested. Defaulting to JP based on IP for prototype.");
+      }
+      
+      // Move to Lobby
+      document.getElementById('view-auth').classList.remove('active');
+      document.getElementById('view-lobby').classList.add('active');
+    }
+
+    function startSession() {
+      // Setup Game UI
+      document.getElementById('view-lobby').classList.remove('active');
+      document.getElementById('main-header').classList.remove('hidden');
+      document.getElementById('bottom-nav').classList.remove('hidden');
+      
+      switchView('dashboard');
+      startTimer(3 * 60 * 60); // 3 hours in seconds
+
+      // Simulate a random Secret Quest popping up after 15 seconds
+      setTimeout(() => {
+        document.getElementById('secret-quest-modal').classList.add('active');
+      }, 15000);
+    }
+
+    // ==========================================
+    // MAP LOGIC (LEAFLET)
+    // ==========================================
+    function initMap() {
+      // Center roughly on Tokyo for prototype
+      const lat = 35.6580;
+      const lng = 139.7016;
+      
+      map = L.map('leaflet-map', { zoomControl: false }).setView([lat, lng], 15);
+      
+      // Use CartoDB Dark Matter tiles for nightlife vibe
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 20
+      }).addTo(map);
+
+      // Custom Neon Markers
+      const createIcon = (color) => L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="width:16px; height:16px; background-color:${color}; border-radius:50%; box-shadow: 0 0 15px ${color}; border: 2px solid white;"></div>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+
+      // Add self (cyan)
+      L.marker([lat, lng], {icon: createIcon('#00F0FF')}).addTo(map).bindPopup("<b>You</b>");
+      // Add friend 1 (purple)
+      L.marker([lat + 0.002, lng + 0.003], {icon: createIcon('#B026FF')}).addTo(map).bindPopup("<b>Alex</b>");
+      // Add friend 2 (purple)
+      L.marker([lat - 0.001, lng - 0.004], {icon: createIcon('#B026FF')}).addTo(map).bindPopup("<b>Sarah</b>");
+      // Add completed quest (lime)
+      L.marker([lat + 0.004, lng - 0.002], {icon: createIcon('#39FF14')}).addTo(map).bindPopup("Completed: Bartender Shot");
+
+      mapInitialized = true;
+    }
+
+    function centerMap() {
+      if(map) map.setView([35.6580, 139.7016], 15, { animate: true });
+    }
+
+    // ==========================================
+    // TIMER LOGIC
+    // ==========================================
+    function startTimer(duration) {
+      let timer = duration, hours, minutes, seconds;
+      const display = document.getElementById('countdown-timer');
+      
+      setInterval(function () {
+        hours = parseInt(timer / 3600, 10);
+        minutes = parseInt((timer % 3600) / 60, 10);
+        seconds = parseInt(timer % 60, 10);
+
+        hours = hours < 10 ? "0" + hours : hours;
+        minutes = minutes < 10 ? "0" + minutes : minutes;
+        seconds = seconds < 10 ? "0" + seconds : seconds;
+
+        display.textContent = hours + ":" + minutes + ":" + seconds;
+
+        if (--timer < 0) {
+          timer = 0;
+          alert("NIGHT OVER! Tallying final results...");
+          // In real app: Trigger backend wrap-up, lock submissions, route to recap page.
+        }
+      }, 1000);
+    }
+
+    // ==========================================
+    // PHOTO COMPRESSION & VALIDATION LOGIC
+    // ==========================================
+    // Simulate the client-side steps detailed in the Backend README
+    function processPhoto(input) {
+      if (input.files && input.files[0]) {
+        const overlay = document.getElementById('validation-overlay');
+        const status = document.getElementById('val-status');
+        const subtext = document.getElementById('val-subtext');
+        
+        overlay.classList.remove('hidden');
+        overlay.classList.add('flex');
+
+        // Step 1: Simulate Client-Side Compression (Canvas API would be used here)
+        setTimeout(() => {
+          status.textContent = "Analyzing Location & EXIF...";
+          subtext.textContent = "Verifying photo was taken just now in your area.";
+          
+          // Step 2: Simulate Anti-cheat / GPS validation delay
+          setTimeout(() => {
+            status.textContent = "Uploading to Server...";
+            subtext.textContent = "Securing photo proof.";
+            
+            // Step 3: Success
+            setTimeout(() => {
+              overlay.classList.remove('flex');
+              overlay.classList.add('hidden');
+              
+              // Reset overlay text for next time
+              status.textContent = "Compressing Photo...";
+              subtext.textContent = "Optimizing file size before upload.";
+              
+              // Trigger Success
+              awardPoints();
+              input.value = ''; // clear input
+            }, 800);
+          }, 1500);
+        }, 1000);
+      }
+    }
+
+    function awardPoints() {
+      // Update Score
+      score += 100;
+      
+      // Animate score changes
+      const scoreEls = [document.getElementById('user-score'), document.getElementById('lb-user-score')];
+      scoreEls.forEach(el => {
+        el.textContent = score;
+        el.classList.add('text-white', 'scale-110'); // Flash effect
+        setTimeout(() => el.classList.remove('text-white', 'scale-110'), 300);
+      });
+
+      // Show Toast Notification
+      const toast = document.getElementById('toast');
+      toast.classList.remove('opacity-0', 'translate-y-[-20px]');
+      toast.classList.add('opacity-100', 'translate-y-0');
+      
+      setTimeout(() => {
+        toast.classList.remove('opacity-100', 'translate-y-0');
+        toast.classList.add('opacity-0', 'translate-y-[-20px]');
+      }, 3000);
+
+      // In real app: Fetch next quest from backend and update DOM.
+      document.querySelector('h2.font-syne.text-3xl.pr-12').textContent = "Get the DJ to flash a peace sign for the camera.";
+    }
+  </script>
+</body>
+</html>
